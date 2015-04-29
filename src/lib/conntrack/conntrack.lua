@@ -141,6 +141,8 @@ end
 function Conntrack:has_connection_udp(p_id, p)
    if not self.conns[p_id] then
       self.conns[p_id] = connection_id()
+      -- Create new connection
+      self._n_connections = self._n_connections + 1
    end
    return true
 end

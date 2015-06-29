@@ -1,19 +1,36 @@
 module(..., package.seeall)
 
 local bit = require("bit")
+local pf = require("pf")
 
 --- ### `basicnat` app: Implement http://www.ietf.org/rfc/rfc1631.txt Basic NAT
 --- This translates one IP address to another IP address
 
 BasicNAT = {}
 
-function BasicNAT:new (conf)
-   local c = {external_ip = conf.external_ip, internal_ip = conf.internal_ip}
-   return setmetatable(c, {__index=BasicNAT})
-end
-
 local function bytes_to_uint32(a, b, c, d)
    return a * 2^24 + b * 2^16 + c * 2^8 + d
+end
+
+local function str_ip_to_uint32(ip)
+   local a, b, c, d = ip:match("([0-9]+).([0-9]+).([0-9]+).([0-9]+)")
+   return bytes_to_uint32(tonumber(a), tonumber(b), tonumber(c), tonumber(d))
+end
+
+local function subst(str, values)
+   local out, pos = '', 1
+   while true do
+      local before, after = str:match('()%$[%w_]+()', pos)
+      if not before then return out..str:sub(pos) end
+      out = out..str:sub(pos, before - 1)
+      local var = str:sub(before + 1, after - 1)
+      local val = values[var]
+      print (before, after, var, val)
+      if not val then error('var not found: '..var) end
+      out = out..val
+      pos = after
+   end
+   return out
 end
 
 local ipv4_base = 14 -- Ethernet encapsulated ipv4
@@ -27,16 +44,6 @@ local function uint32_to_bytes(u)
    local c = bit.band(bit.rshift(u, 8), 0xff)
    local d = bit.band(u, 0xff)
    return a, b, c, d
-end
-
-local function get_src_ip(pkt)
-   local d = pkt.data
-   return bytes_to_uint32(d[26], d[27], d[28], d[29])
-end
-
-local function get_dst_ip(pkt)
-   local d = pkt.data
-   return bytes_to_uint32(d[30], d[31], d[32], d[33])
 end
 
 local function csum_carry_and_not(checksum)
@@ -80,7 +87,7 @@ local function transport_checksum(pkt)
    return csum_carry_and_not(checksum)
 end
 
-local function fix_checksums(pkt)
+local function fix_checksums(pkt, len)
    local ipchecksum = ipv4_checksum(pkt)
    pkt.data[ipv4_base + 10] = bit.rshift(ipchecksum, 8)
    pkt.data[ipv4_base + 11] = bit.band(ipchecksum, 0xff)
@@ -101,7 +108,7 @@ local function fix_checksums(pkt)
 end
 
 -- TODO: fix the checksum
-local function set_src_ip(pkt, ip)
+local function set_src_ip(pkt, len, ip)
    local a, b, c, d = uint32_to_bytes(ip)
    pkt.data[ipv4_base + 12] = a
    pkt.data[ipv4_base + 13] = b
@@ -111,7 +118,7 @@ local function set_src_ip(pkt, ip)
 end
 
 -- TODO: fix the checksum
-local function set_dst_ip(pkt, ip)
+local function set_dst_ip(pkt, len, ip)
    local a, b, c, d = uint32_to_bytes(ip)
    pkt.data[ipv4_base + 16] = a
    pkt.data[ipv4_base + 17] = b
@@ -125,23 +132,39 @@ end
 -- TCP, UDP and ICMP header checksums are translated. For inbound
 -- packets, the destination IP address and the checksums as listed above
 -- are translated.
-local function basic_rewrite(pkt, external_ip, internal_ip, mask)
-   -- Only attempt to alter ipv4 packets. Assume an Ethernet encapsulation.
-   if pkt.data[12] ~= 8 or pkt.data[13] ~= 0 then return pkt end
-   local src_ip, dst_ip = get_src_ip(pkt), get_dst_ip(pkt)
-   if src_ip == external_ip then
-      set_src_ip(pkt, internal_ip)
+
+-- FIXME: Would be nice to have &ip src as an addressable, so we could
+-- pass the address at which to munge as an argument to the handlers
+-- without assuming a certain encapsulation.
+local dispatch_template = [[
+(incoming, outgoing) => {
+  ip src $external_ip => incoming()
+  ip dst $internal_ip => outgoing()
+}]]
+
+local function make_dispatcher(conf)
+   local external_ip = str_ip_to_uint32(conf.external_ip)
+   local internal_ip = str_ip_to_uint32(conf.internal_ip)
+   local function incoming(pkt, len)
+      set_src_ip(pkt, len, internal_ip)
+      fix_checksums(pkt, len)
    end
-   if dst_ip == internal_ip then
-      set_dst_ip(pkt, external_ip)
+   local function outgoing(pkt, len)
+      set_dst_ip(pkt, len, external_ip)
+      fix_checksums(pkt, len)
    end
-   fix_checksums(pkt)
-   return pkt
+   return pf.dispatch.compile(subst(dispatch_template, conf))(
+      incoming, outgoing)
+end
+
+function BasicNAT:new (conf)
+   local c = {dispatch = make_dispatcher(conf)}
+   return setmetatable(c, {__index=BasicNAT})
 end
 
 function BasicNAT:push ()
    local i, o = self.input.input, self.output.output
    local pkt = link.receive(i)
-   local natted_pkt = basic_rewrite(pkt, self.external_ip, self.internal_ip)
+   self.dispatch(pkt, pkt.length)
    link.transmit(o, natted_pkt)
 end

@@ -49,78 +49,80 @@ local function csum_carry_and_not(checksum)
    return bit.band(bit.bnot(checksum), 0xffff)
 end
 
-local function ipv4_checksum(pkt, ip_base, len)
+local function ipv4_checksum(data, ip_base)
+   local IHL = bit.rshift(data[ip_base], 4)
+   local len = IHL * 4
    local checksum = 0
-   for i = ip_base, ip_base + 18, 2 do
+   for i = ip_base, ip_base + len, 2 do
       if i ~= ip_base + 10 then -- The checksum bytes are assumed to be 0
-         checksum = checksum + pkt.data[i] * 0x100 + pkt.data[i+1]
+         checksum = checksum + data[i] * 0x100 + data[i+1]
       end
    end
    return csum_carry_and_not(checksum)
 end
 
-local function tcp_checksum(pkt, ip_base, tcp_base, tcp_len)
+local function tcp_checksum(data, ip_base, tcp_base, tcp_len)
    local checksum = 0
    -- First 64 bytes of the TCP pseudo-header: the ip addresses
    for i = ip_base + 12, ip_base + 18, 2 do
-      checksum = checksum + pkt.data[i] * 0x100 + pkt.data[i+1]
+      checksum = checksum + data[i] * 0x100 + data[i+1]
    end
    -- Add the protocol field of the IPv4 header to the checksum
-   local protocol = pkt.data[ip_base + 9]
+   local protocol = data[ip_base + 9]
    checksum = checksum + protocol
-   local tcplen = pkt.data[ip_base + 2] * 0x100 + pkt.data[ip_base + 3] - 20
+   local tcplen = data[ip_base + 2] * 0x100 + data[ip_base + 3] - 20
    checksum = checksum + tcplen -- end of pseudo-header
 
    for i = transport_base, transport_base + tcplen - 2, 2 do
       if i ~= transport_base + 16 then -- The checksum bytes are zero
-         checksum = checksum + pkt.data[i] * 0x100 + pkt.data[i+1]
+         checksum = checksum + data[i] * 0x100 + data[i+1]
       end
    end
    if tcplen % 2 == 1 then
-      checksum = checksum + pkt.data[transport_base + tcplen - 1]
+      checksum = checksum + data[transport_base + tcplen - 1]
    end
    return csum_carry_and_not(checksum)
 end
 
-local function udp_checksum(pkt, base, len)
+local function udp_checksum(data, ip_base, udp_base, udp_len)
    -- ipv4 udp checksums are optional
    return 0
 end
 
-local function fix_tcp_checksums(pkt, ip_base, tcp_base, payload_len)
-   local transport_csum = tcp_checksum(pkt, ip_base, tcp_base, payload_len)
-   pkt.data[tcp_base + 16] = bit.rshift(transport_csum, 8)
-   pkt.data[tcp_base + 17] = bit.band(transport_csum, 0xff)
+local function fix_tcp_checksums(data, ip_base, tcp_base, payload_len)
+   local checksum = tcp_checksum(data, ip_base, tcp_base, payload_len)
+   data[tcp_base + 16] = bit.rshift(checksum, 8)
+   data[tcp_base + 17] = bit.band(checksum, 0xff)
 end
 
-local function fix_udp_checksums(pkt, udp_base, payload_len)
-   local transport_csum = udp_checksum(pkt, udp_base, payload_len)
-   pkt.data[udp_base + 6] = bit.rshift(transport_csum, 8)
-   pkt.data[udp_base + 7] = bit.band(transport_csum, 0xff)
+local function fix_udp_checksums(data, ip_base, udp_base, payload_len)
+   local checksum = udp_checksum(data, ip_base, udp_base, payload_len)
+   data[udp_base + 6] = bit.rshift(checksum, 8)
+   data[udp_base + 7] = bit.band(checksum, 0xff)
 end
 
-local function fix_ip_checksums(pkt, ip_base, header_size)
-   local ipchecksum = ipv4_checksum(pkt, ip_base_header_size)
-   pkt.data[ip_base + 10] = bit.rshift(ipchecksum, 8)
-   pkt.data[ip_base + 11] = bit.band(ipchecksum, 0xff)
+local function fix_ip_checksums(data, ip_base)
+   local checksum = ipv4_checksum(data, ip_base)
+   data[ip_base + 10] = bit.rshift(checksum, 8)
+   data[ip_base + 11] = bit.band(checksum, 0xff)
 end
 
-local function set_src_ip(pkt, ip_base, ip)
+local function set_src_ip(data, ip_base, ip)
    local a, b, c, d = uint32_to_bytes(ip)
-   pkt.data[ip_base + 12] = a
-   pkt.data[ip_base + 13] = b
-   pkt.data[ip_base + 14] = c
-   pkt.data[ip_base + 15] = d
-   return pkt
+   data[ip_base + 12] = a
+   data[ip_base + 13] = b
+   data[ip_base + 14] = c
+   data[ip_base + 15] = d
+   fix_ip_checksums(data, ip_base)
 end
 
-local function set_dst_ip(pkt, ip_base, ip)
+local function set_dst_ip(data, ip_base, ip)
    local a, b, c, d = uint32_to_bytes(ip)
-   pkt.data[ip_base + 16] = a
-   pkt.data[ip_base + 17] = b
-   pkt.data[ip_base + 18] = c
-   pkt.data[ip_base + 19] = d
-   return pkt
+   data[ip_base + 16] = a
+   data[ip_base + 17] = b
+   data[ip_base + 18] = c
+   data[ip_base + 19] = d
+   fix_ip_checksums(data, ip_base)
 end
 
 -- For packets outbound from the
@@ -129,58 +131,72 @@ end
 -- packets, the destination IP address and the checksums as listed above
 -- are translated.
 
--- FIXME: Would be nice to have &ip src as an addressable, so we could
--- pass the address at which to munge as an argument to the handlers
--- without assuming a certain encapsulation.
-
+-- FIXME: Would be nice to have &ip src as an addressable.
 -- todo: add comment syntax, "else"
 local dispatch_template = [[
-(incoming_tcp, incoming_udp, incoming_other,
+(forward, drop,
+ incoming_tcp, incoming_udp, incoming_other,
  outgoing_tcp, outgoing_udp, outgoing_other) => {
-  ip src $external_ip => {
-    tcp => incoming_tcp(&ip[0], &ip_payload[0])
-    udp => incoming_udp(&ip[0], &ip_payload[0])
-    _ => incoming_other(&ip[0], &ip_payload[0])
-  }
-  ip dst $internal_ip => {
-    tcp => outgoing_tcp(&ip[0], &ip_payload[0])
-    udp => outgoing_udp(&ip[0], &ip_payload[0])
-    _ => outgoing_other(&ip[0], &ip_payload[0])
-  }
+   not ip => forward
+   ip[6] & 0x4 = 1 => drop
+   ip src $external_ip => {
+      tcp => incoming_tcp(&ip[0], &tcp[0])
+      udp => incoming_udp(&ip[0], &udp[0])
+      _ => incoming_other(&ip[0])
+   }
+   ip dst $internal_ip => {
+      tcp => outgoing_tcp(&ip[0], &tcp[0])
+      udp => outgoing_udp(&ip[0], &udp[0])
+      _ => outgoing_other(&ip[0])
+   }
+   _ => drop
 }]]
+
+local function forward(data, len)
+   return len
+end
+
+local function drop(data, len)
+   -- Could truncate packet here and overwrite with ICMP error if
+   -- wanted.
+   return false
+end
 
 local function make_dispatcher(conf)
    local external_ip = str_ip_to_uint32(conf.external_ip)
    local internal_ip = str_ip_to_uint32(conf.internal_ip)
-   local function incoming_tcp(pkt, len, ip_base, tcp_base)
-      set_src_ip(pkt, len, ip_base, internal_ip)
-      fix_ip_checksums(pkt, ip_base, tcp_base - ip_base)
-      fix_tcp_checksums(pkt, tcp_base, len - tcp_base)
+   -- FIXME: Verify IP header length within packet length?  What about
+   -- payload length?
+   local function incoming_tcp(data, len, ip_base, tcp_base)
+      set_src_ip(data, ip_base, internal_ip)
+      fix_tcp_checksums(data, tcp_base, len - tcp_base)
+      return len
    end
-   local function incoming_udp(pkt, len, ip_base, udp_base)
-      set_src_ip(pkt, ip_base, internal_ip)
-      fix_ip_checksums(pkt, ip_base, udp_base - ip_base)
-      fix_udp_checksums(pkt, udp_base, len - udp_base)
+   local function incoming_udp(data, len, ip_base, udp_base)
+      set_src_ip(data, ip_base, internal_ip)
+      fix_udp_checksums(data, udp_base, len - udp_base)
+      return len
    end
-   local function incoming_other(pkt, len, ip_base, payload_base)
-      set_src_ip(pkt, ip_base, internal_ip)
-      fix_ip_checksums(pkt, ip_base, udp_base - ip_base)
+   local function incoming_other(data, len, ip_base, payload_base)
+      set_src_ip(data, ip_base, internal_ip)
+      return len
    end
-   local function outgoing_tcp(pkt, len, ip_base, tcp_base)
-      set_dst_ip(pkt, ip_base, external_ip)
-      fix_ip_checksums(pkt, ip_base, tcp_base - ip_base)
-      fix_tcp_checksums(pkt, tcp_base, len - tcp_base)
+   local function outgoing_tcp(data, len, ip_base, tcp_base)
+      set_dst_ip(data, ip_base, external_ip)
+      fix_tcp_checksums(data, tcp_base, len - tcp_base)
+      return len
    end
-   local function outgoing_udp(pkt, len, ip_base, udp_base)
-      set_dst_ip(pkt, ip_base, external_ip)
-      fix_ip_checksums(pkt, ip_base, udp_base - ip_base)
-      fix_udp_checksums(pkt, udp_base, len - udp_base)
+   local function outgoing_udp(data, len, ip_base, udp_base)
+      set_dst_ip(data, ip_base, external_ip)
+      fix_udp_checksums(data, udp_base, len - udp_base)
+      return len
    end
-   local function outgoing_other(pkt, len, ip_base, payload_base)
-      set_dst_ip(pkt, len, ip_base, external_ip)
-      fix_ip_checksums(pkt, ip_base, udp_base - ip_base)
+   local function outgoing_other(data, len, ip_base)
+      set_dst_ip(data, ip_base, external_ip)
+      return len
    end
    return pf.dispatch.compile(subst(dispatch_template, conf))(
+      forward, drop,
       incoming_tcp, incoming_udp, incoming_other,
       outgoing_tcp, outgoing_udp, outgoing_other)
 end
@@ -192,7 +208,12 @@ end
 
 function BasicNAT:push ()
    local i, o = self.input.input, self.output.output
-   local pkt = link.receive(i)
-   self.dispatch(pkt, pkt.length)
-   link.transmit(o, natted_pkt)
+   while not link.empty() do
+      local pkt = link.receive(i)
+      local out_len = self.dispatch(pkt.data, pkt.length)
+      if out_len then
+         pkt.length = out.len
+         link.transmit(o, pkt)
+      end
+   end
 end

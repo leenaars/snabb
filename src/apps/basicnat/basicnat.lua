@@ -181,7 +181,7 @@ function BasicNAT:push ()
    local i, o = self.input.input, self.output.output
    while not link.empty() do
       local pkt = link.receive(i)
-      local out_len = self.dispatch(pkt.data, pkt.length)
+      local out_len = self.match(self.handlers, pkt.data, pkt.length)
       if out_len then
          pkt.length = out.len
          link.transmit(o, pkt)

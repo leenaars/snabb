@@ -3,7 +3,8 @@ local ffi = require("ffi")
 local C = ffi.C
 local header = require("lib.protocol.header")
 local lib = require("core.lib")
-local bitfield, update_csum, finish_csum = lib.bitfield, lib.update_csum, lib.finish_csum
+local bitfield = lib.bitfield
+local ipsum = require("lib.checksum").ipsum
 
 -- GRE uses a variable-length header as specified by RFCs 2784 and
 -- 2890.  The actual size is determined by flag bits in the base
@@ -19,20 +20,20 @@ local gre = subClass(header)
 
 local gre_t = ffi.typeof[[
       struct {
-	 uint16_t bits; // Flags, version
-	 uint16_t protocol;
+         uint16_t bits; // Flags, version
+         uint16_t protocol;
       }
 ]]
 
 local subclasses = { csum     = "lib.protocol.gre_csum",
-		     key      = "lib.protocol.gre_key",
-		     csum_key = "lib.protocol.gre_csum_key" }
+                     key      = "lib.protocol.gre_key",
+                     csum_key = "lib.protocol.gre_csum_key" }
 
 -- Class variables
 gre._name = "gre"
 gre._header_type = gre_t
 gre._header_ptr_type = ffi.typeof("$*", gre_t)
-gre._ulp = { 
+gre._ulp = {
    class_map = { [0x6558] = "lib.protocol.ethernet" },
    method    = 'protocol' }
 
@@ -45,14 +46,14 @@ function gre:new (config)
    local type = nil
    if config then
       if config.checksum then
-	 type = 'csum'
+         type = 'csum'
       end
       if config.key ~= nil then
-	 if type then
-	    type = 'csum_key'
-	 else
-	    type = 'key'
-	 end
+         if type then
+            type = 'csum_key'
+         else
+            type = 'key'
+         end
       end
    end
 
@@ -83,9 +84,9 @@ function gre:new_from_mem (mem, size)
    end
    if bitfield(16, parse_mem[0], 'bits', 2, 1) == 1 then
       if type then
-	 type = 'csum_key'
+         type = 'csum_key'
       else
-	 type = 'key'
+         type = 'key'
       end
       has_key = true
    end
@@ -106,8 +107,9 @@ local function checksum(header, payload, length)
    local csum_in = header.csum;
    header.csum = 0;
    header.reserved1 = 0;
-   local csum = finish_csum(update_csum(payload, length,
-					update_csum(header, ffi.sizeof(header), 0)))
+   local csum = ipsum(payload, length,
+                      bit.bnot(ipsum(ffi.cast("uint8_t *", header),
+                                     ffi.sizeof(header), 0)))
    header.csum = csum_in
    return csum
 end

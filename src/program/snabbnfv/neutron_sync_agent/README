@@ -1,7 +1,10 @@
 snabbnfv neutron-sync-agent [OPTIONS]
 
 Poll the neutron-sync-master for new database configurations and
-translate them into snabbnfv traffic process configuration files.
+translate them into snabbnfv traffic process configuration files. Uses
+neutron2snabb to perform the translations. $NEUTRON2SNABB can be set to
+point to the location of the neutron2snabb command. The default is
+"snabb snabbnfv neutron2snabb".
 
   -s DIR, --snabb-dir DIR
                              Output snabbnfv traffic config files to DIR.
@@ -9,6 +12,10 @@ translate them into snabbnfv traffic process configuration files.
   -h HOST, --sync-host HOST
                              Connect to snabbnfv-sync-master on HOST.
                              Default: $SYNC_HOST
+
+  -P PORT, --sync-port PORT
+                             Connect to snabbnfv-sync-master on PORT.
+                             Default: $SYNC_PORT or 9418
   -p PATH, --sync-path PATH
                              Use PATH on snabbnfv-sync-master.
                              Default: $SYNC_PATH
@@ -18,5 +25,8 @@ translate them into snabbnfv traffic process configuration files.
   -i SECONDS, --interval SECONDS
                              Sleep for SECONDS between sync requests.
                              Default: $SYNC_INTERVAL or 1
+  -t DIR, --tmp-dir DIR
+                             Store temporary files in DIR.
+			     Default: $TMP_DIR or /tmp/snabbswitch
   -h, --help
                              Print this help message and exit.

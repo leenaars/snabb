@@ -3,6 +3,9 @@ module(..., package.seeall)
 local lib  = require("core.lib")
 local json = require("lib.json")
 local usage = require("program.snabbnfv.neutron2snabb.README_inc")
+local neutron2snabb_schema = require("program.snabbnfv.neutron2snabb.neutron2snabb_schema")
+
+local NULL = "\\N"
 
 function run (args)
    if #args ~= 2 and #args ~= 3 then
@@ -10,6 +13,31 @@ function run (args)
    end
    create_config(unpack(args))
 end
+
+-- The Neutron database tables that we need schema information to process.
+schema_tables = {
+   'ml2_network_segments', 'networks', 'ports', 'ml2_port_bindings',
+   'securitygrouprules', 'securitygroupportbindings'
+}
+
+-- The default schema below is assumed if the database snapshot does
+-- not include parsable table definitions.
+default_schemas = {
+   ml2_network_segments = {'id', 'network_id', 'network_type',
+                           'physical_network', 'segmentation_id'},
+   networks             = {'tenant_id', 'id', 'name', 'status',
+                           'admin_state_up', 'shared'},
+   ports                = {'tenant_id', 'id', 'name', 'network_id',
+                           'mac_address', 'admin_state_up', 'status',
+                           'device_id', 'device_owner'},
+   ml2_port_bindings    = {'port_id', 'host', 'vif_type', 'driver', 'segment',
+                           'vnic_type', 'vif_details', 'profile'},
+   securitygrouprules   = {'tenant_id', 'id', 'security_group_id',
+                           'remote_group_id', 'direction', 'ethertype',
+                           'protocol', 'port_range_min', 'port_range_max',
+                           'remote_ip_prefix'},
+   securitygroupportbindings = {'port_id', 'security_group_id'}
+}
 
 -- Create a Snabb Switch traffic process configuration.
 --
@@ -20,41 +48,53 @@ end
 --
 -- HOSTNAME is optional and defaults to the local hostname.
 function create_config (input_dir, output_dir, hostname)
+   local ok, schema = pcall(neutron2snabb_schema.read, input_dir, schema_tables)
+   if not ok then
+      print("Warning - falling back to default schema because none found:")
+      print("  "..schema)
+      schema = default_schemas
+   end
    local hostname = hostname or gethostname()
    local segments = parse_csv(input_dir.."/ml2_network_segments.txt",
-                              {'id', 'network_id', 'network_type', 'physical_network', 'segmentation_id'},
-                              'network_id')
+                              schema.ml2_network_segments,
+                              'id')
    local networks = parse_csv(input_dir.."/networks.txt",
-                              {'tenant_id', 'id', 'name', 'status', 'admin_state_up', 'shared'},
+                              schema.networks,
                               'id')
    local ports = parse_csv(input_dir.."/ports.txt",
-                           {'tenant_id', 'id', 'name', 'network_id', 'mac_address', 'admin_state_up', 'status', 'device_id', 'device_owner'},
+                           schema.ports,
                            'id')
    local port_bindings = parse_csv(input_dir.."/ml2_port_bindings.txt",
-                                   {'id', 'host', 'vif_type', 'driver', 'segment', 'vnic_type', 'vif_details', 'profile'},
-                                   'id')
+                                   schema.ml2_port_bindings,
+                                   'port_id')
    local secrules = parse_csv(input_dir.."/securitygrouprules.txt",
-                              {'tenant_id', 'id', 'security_group_id', 'remote_group_id', 'direction', 'ethertype', 'protocol', 'port_range_min', 'port_range_max', 'remote_ip_prefix'},
+                              schema.securitygrouprules,
                               'security_group_id', true)
    local secbindings = parse_csv(input_dir.."/securitygroupportbindings.txt",
-                                 {'port_id', 'security_group_id'},
+                                 schema.securitygroupportbindings,
                                  'port_id')
+   print("Parsing neutron db tables")
    -- Compile zone configurations.
    local zones = {}
    for _, port in pairs(ports) do
+      print("PortID: ", port.id)
       local binding = port_bindings[port.id]
       -- If the port is a 'snabb' port, lives on our host and is online
       -- then we compile its configuration.
+      print("BindingID ", binding.id, " has driver ", binding.driver)
       if binding.driver == "snabb" then
          local vif_details = json.decode(binding.vif_details)
-         -- pcall incase the field is missing
+         -- See https://github.com/SnabbCo/snabbswitch/pull/423
          local profile = vif_details["binding:profile"]
          profile = profile or {}
+         print("vif_details has hostname ", vif_details.zone_host, "(we want ", hostname, ")")
          if vif_details.zone_host == hostname then
             local zone_port = vif_details.zone_port
             -- Each zone can have multiple port configurtions.
             if not zones[zone_port] then zones[zone_port] = {} end
+            print("admin_state_ip is ", port.admin_state_up)
             if port.admin_state_up ~= '0' then
+               print("Adding zone port '", zone_port, "' to list")
                -- Note: Currently we don't use `vif_details.zone_gbps'
                -- because its "not needed by the traffic process in the
                -- current implementation".
@@ -62,8 +102,9 @@ function create_config (input_dir, output_dir, hostname)
                             { vlan = vif_details.zone_vlan,
                               mac_address = port.mac_address,
                               port_id = port.id,
-                              ingress_filter = filter(port, secbindings, secrules, 'ingress', profile.packetfilter),
-                              egress_filter = filter(port, secbindings, secrules, 'egress', profile.packetfilter),
+                              ingress_filter = filter(port, secbindings, secrules, 'ingress'),
+                              egress_filter = filter(port, secbindings, secrules, 'egress'),
+                              stateful_filter = (profile.packetfilter ~= 'stateless'),
                               rx_police_gbps = profile.rx_police_gbps,
                               tx_police_gbps = profile.tx_police_gbps,
                               tunnel = tunnel(port, vif_details, profile) })
@@ -79,35 +120,7 @@ function create_config (input_dir, output_dir, hostname)
    end
 end
 
--- Return the packet filter expression.
-function filter (port, secbindings, secrules, direction, type)
-   local rules = {}
-   direction = direction:lower()
-   if secbindings[port.id] then
-      for _,r in ipairs(secrules[secbindings[port.id].security_group_id]) do
-         if r.remote_group_id == "\\N" then
-            if r.direction:lower() == direction then
-               local NULL = "\\N" -- SQL null
-               local rule = {}
-               if r.ethertype        ~= NULL then rule.ethertype        = r.ethertype:lower() end
-               if r.protocol         ~= NULL then rule.protocol         = r.protocol:lower()  end
-               if r.port_range_min   ~= NULL then rule.dest_port_min    = r.port_range_min    end
-               if r.port_range_max   ~= NULL then rule.dest_port_max    = r.port_range_max    end
-               if r.remote_ip_prefix ~= NULL then rule.remote_ip_prefix = r.remote_ip_prefix  end
-               table.insert(rules, rule)
-            end
-         end
-      end
-      if type == "stateless" then
-         return { rules = rules }
-      else
-         return { rules = rules,
-                  state_track = port.id,
-                  state_check = port.id }
-      end
-   end
-end
-
+  
 -- Return the L2TPv3 tunnel expresion.
 function tunnel (port, vif_details, profile)
    if profile.tunnel_type == "L2TPv3" then
@@ -164,5 +177,96 @@ function gethostname ()
    local hostname = lib.readcmd("hostname", "*l")
    if hostname then return hostname
    else error("Could not get hostname.") end
+end
+
+
+-- Translation of Security Groups into pflua filter expressions.
+-- See selftest() below for examples of how this works.
+
+-- Return the pcap filter expression to implement a security group.
+function filter (port, secbindings, secrules, direction)
+   direction = direction:lower()
+   if secbindings[port.id] then
+      local rules = secrules[secbindings[port.id].security_group_id]
+      return rulestofilter(rules, direction)
+   end
+end
+
+function rulestofilter (rules, direction)
+   local t = {}
+   for i = 1, #rules do
+      local r = rules[i]
+      for key, value in pairs(r) do
+         if value == NULL then r[key] = nil
+         elseif type(value) == 'string' then r[key] = value:lower() end
+      end
+      if r.direction == direction then
+         t[#t+1] = ruletofilter(r, direction)
+      end
+   end
+   if #t > 0 then return parenconcat(t, " or ") end
+end
+
+function ruletofilter (r, direction)
+   local matches = {}           -- match rules to be combined
+   local icmp
+   if     r.ethertype == "ipv4" then matches[#matches+1] = "ip"  icmp = 'icmp'
+   elseif r.ethertype == "ipv6" then matches[#matches+1] = "ip6" icmp = 'icmp6'
+   else   error("unknown ethertype: " .. r.ethertype) end
+   
+   if     r.protocol == "tcp" then matches[#matches+1] = "tcp"
+   elseif r.protocol == "udp" then matches[#matches+1] = "udp"
+   elseif r.protocol == "icmp" then matches[#matches+1] = icmp end
+
+   if r.port_range_min or r.port_range_max then
+      local min = r.port_range_min or r.port_range_max
+      local max = r.port_range_max or r.port_range_min
+      matches[#matches+1] = ("dst portrange %d-%d"):format(min, max)
+   end
+   
+   if r.remote_ip_prefix then
+      local direction = ({ingress = "src", egress = "dst"})[direction]
+      matches[#matches+1] = (direction.." net "..r.remote_ip_prefix)
+   end
+
+   local filter = parenconcat(matches, " and ")
+   if r.ethertype == "ipv4" then filter = "(arp or "..filter..")" end
+   return filter
+end
+
+-- Parenthesize and concatenate
+function parenconcat (t, sep)
+   if #t == 1 then return t[1] else return "("..table.concat(t, sep)..")" end
+end
+
+function selftest ()
+   print("selftest: neutron2snabb")
+   local function checkrule (rule, filter)
+      local got = rulestofilter(lib.load_string(rule)(), 'ingress')
+      if got ~= filter then
+         print(([[Unexpected translation of %s"
+  Expected: %q
+    Actual: %q]]):format(
+               rule, filter, got))
+         error("selftest failed")
+      else
+         print(("ok: %s\n => %s"):format(rule, got))
+      end
+   end
+   checkrule("{{direction='ingress', ethertype='IPv6'}}", 'ip6')
+   checkrule("{{direction='ingress', ethertype='IPv4'}}", '(arp or ip)')
+   checkrule("{{direction='ingress', ethertype='IPv4', protocol='tcp'}}",
+             '(arp or (ip and tcp))')
+   checkrule("{{direction='ingress', ethertype='IPv4', protocol='udp'}}", 
+             '(arp or (ip and udp))')
+   checkrule("{{direction='ingress', ethertype='IPv4', protocol='udp', port_range_min=1000}}",
+             '(arp or (ip and udp and dst portrange 1000-1000))')
+   checkrule("{{direction='ingress', ethertype='IPv4', protocol='udp', port_range_max=2000}}",
+             '(arp or (ip and udp and dst portrange 2000-2000))')
+   checkrule("{{direction='ingress', ethertype='IPv4', protocol='tcp', port_range_min=1000, port_range_max=2000}}",
+             '(arp or (ip and tcp and dst portrange 1000-2000))')
+   checkrule("{{direction='ingress', ethertype='IPv6', protocol='tcp'}, {direction='ingress', ethertype='IPv4', protocol='udp', remote_ip_prefix='10.0.0.0/8'}}",
+             '((ip6 and tcp) or (arp or (ip and udp and src net 10.0.0.0/8)))')
+   print("selftest ok")
 end
 

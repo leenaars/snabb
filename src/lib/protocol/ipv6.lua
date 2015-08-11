@@ -16,23 +16,23 @@ local defaults = {
 
 local ipv6hdr_t = ffi.typeof[[
       struct {
-	 uint32_t v_tc_fl; // version, tc, flow_label
-	 uint16_t payload_length;
-	 uint8_t  next_header;
-	 uint8_t hop_limit;
-	 uint8_t src_ip[16];
-	 uint8_t dst_ip[16];
+         uint32_t v_tc_fl; // version, tc, flow_label
+         uint16_t payload_length;
+         uint8_t  next_header;
+         uint8_t hop_limit;
+         uint8_t src_ip[16];
+         uint8_t dst_ip[16];
       } __attribute__((packed))
 ]]
 
 local ipv6hdr_pseudo_t = ffi.typeof[[
       struct {
-	 char src_ip[16];
-	 char dst_ip[16];
-	 uint16_t ulp_zero;
-	 uint16_t ulp_length;
-	 uint8_t  zero[3];
-	 uint8_t  next_header;
+         char src_ip[16];
+         char dst_ip[16];
+         uint16_t ulp_zero;
+         uint16_t ulp_length;
+         uint8_t  zero[3];
+         uint8_t  next_header;
       } __attribute__((packed))
 ]]
 
@@ -82,7 +82,7 @@ function ipv6:pton (p)
    local in_addr  = ffi.new("uint8_t[16]")
    local result = C.inet_pton(AF_INET6, p, in_addr)
    if result ~= 1 then
-      return false, "malformed IPv6 address: " .. address
+      return false, "malformed IPv6 address: " .. p
    end
    return in_addr
 end

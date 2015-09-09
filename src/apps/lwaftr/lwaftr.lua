@@ -11,6 +11,7 @@ local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 local packet = require("core.packet")
+local bit = require("bit")
 
 local ffi = require("ffi")
 local C = ffi.C
@@ -115,7 +116,7 @@ local function fixup_tcp_checksum(pkt, csum_offset, fixup_val)
    csum = bit.bnot(csum)
 
    if debug then print("new csum", string.format("%x", csum)) end
-   pkt.data[csum_offset] = bit.rshift(bit.band(csum, 0xff00), 8)
+   pkt.data[csum_offset] = bit.rshift(csum, 8)
    pkt.data[csum_offset + 1] = bit.band(csum, 0xff)
 end
 
@@ -192,7 +193,7 @@ function LwAftr:ipv6_encapsulate(pkt, next_hdr_type, ipv6_src, ipv6_dst,
    ipv6_hdr:free()
    -- The API makes setting the payload length awkward; set it manually
    -- Todo: less awkward way to write 16 bits of a number into cdata
-   pkt.data[4] = bit.rshift(bit.band(payload_len, 0xff00), 8)
+   pkt.data[4] = bit.rshift(payload_len, 8)
    pkt.data[5] = bit.band(payload_len, 0xff)
    dgram:push(eth_hdr)
    eth_hdr:free()
@@ -277,7 +278,7 @@ function LwAftr:_encapsulate_ipv4(pkt)
    local proto_offset = constants.ethernet_header_size + 9
    local proto = pkt.data[proto_offset]
 
-   if proto == constants.proto_icmp and self.icmp_policy == conf.policies['DROP'] then
+   if proto == constants.proto_icmp and self.icmp_policy == lwconf.policies['DROP'] then
       packet.free(pkt)
       return nil
    end
@@ -398,7 +399,7 @@ function LwAftr:push ()
       end -- FIXME: silently drop other types; is this the right thing to do?
       --if debug then print("encapsulated") end
       if out_pkt then
-         if type(out_pkt) == type({}) then -- Fragmented
+         if type(out_pkt) == "table" then -- Fragmented
             for _,opkt in ipairs(out_pkt) do
                link.transmit(o, opkt)
             end

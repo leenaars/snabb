@@ -119,6 +119,27 @@ Element   Scapy constructor  Aliases
 ``tcp``   ``TCP()``
 ========= ================== ===========================
 
+A description of the additions on top of Scapy_ follows.
+
+``tcp``
+^^^^^^^
+The ``tcp`` element supports generating varying sequence numbers. This
+is indicated by setting the ``.seq`` attribute to a string value (instead
+of a number) with the name of the method to use. The following methods
+are supported:
+
+``increasing``
+    The sequence number is increased by one for each packet, starting
+    from zero.
+``random``
+    The sequence number is a random number between 0 and 16386.
+
+Example::
+
+    tcp {
+        .seq "increasing"
+        raw { .data "payload" }
+    }
 
 
 .. _HiPack: http://hipack.org

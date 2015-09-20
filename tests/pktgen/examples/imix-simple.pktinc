@@ -4,6 +4,7 @@
 tcp {
 	.sport 80      # Traffic from an HTTP server
 	.dport 10202   # To a random port in a client machine
+	.seq "random"  # Random sequence number.
 	.flags ""      # No flags, meaning no SYN/FIN/ACK: implies that the
 	               # packets are part of a previously established connection
 

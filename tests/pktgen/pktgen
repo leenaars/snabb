@@ -6,18 +6,30 @@
 #
 # Distributed under terms of the MIT license.
 
-from six import print_, iteritems, text_type
+from six import print_, iteritems, text_type, string_types
 from six.moves import range
 from scapy.layers import inet, inet6
 from scapy.utils import PcapWriter
 from scapy import packet
-from itertools import islice
+from itertools import islice, count
 import logging
 import random
 import hipack
 
 # FIXME: Ugh, a global.
 main_spec_file_path = None
+
+
+def seq_randint(a, b):
+    """Yields a sequence of random integers.
+    """
+    while True:
+        yield random.randint(a, b)
+
+TCP_SEQ_GENERATORS = {
+    "random": lambda: seq_randint(0, 16386),
+    "increasing": count,
+}
 
 
 def src_raw(data):
@@ -114,7 +126,18 @@ def mod_ip6(payload, **kw):
 def mod_tcp(payload, **kw):
     """Encapsulates a payload into a TCP packet."""
     _asciify_kw_for_scapy(kw)
-    return ((inet.TCP(**kw) / p) for p in payload)
+    if "seq" in kw and isinstance(kw["seq"], string_types):
+        try:
+            seq = TCP_SEQ_GENERATORS[kw["seq"]]()
+        except KeyError:
+            raise SpecSemanticError(
+                    u"No such TCP sequence number generator: {!r}"
+                        .format(kw["seq"]))
+        del kw["seq"]
+        return ((inet.TCP(seq=seq.next(), **kw) / p) for p in payload)
+    else:
+        return ((inet.TCP(**kw) / p) for p in payload)
+
 
 def mod_pdist(choices):
     """Picks items from a set of choices with associated probabilities.

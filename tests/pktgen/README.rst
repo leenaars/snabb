@@ -6,6 +6,9 @@ packets using a declarative approach. Packet wrangling is done using Scapy_,
 making it possible to easily generate almost any kind of packet supported by
 it.
 
+.. contents::
+
+
 Features
 --------
 
@@ -106,6 +109,29 @@ Example::
         { .probability 0.33, raw { .data "A" } }
         { .probability 0.66, raw { .data "B" } }
     ]
+
+
+``tcpip-ack``
+~~~~~~~~~~~~~
+For each TCP/IP packet, yields each original packet followed by the
+corresponding ACK packet flowing in the opposite direction. Generated
+ACK packets have no payload.
+
+The packets used as input for the ``tcpip-ack`` element must have both
+TCP and IP framing (both v4 and v6 are supported), as in the following
+example::
+
+    tcpip-ack {
+        ip {
+            .src "1.2.3.4"
+            .dst "6.7.8.9"
+            tcp {
+                .sport 80
+                .dport 32000
+                raw { .data "payload" }
+            }
+        }
+    }
 
 
 Scapy elements

@@ -297,6 +297,9 @@ cli.add_argument("-c", "--count", type=int, default=1,
         help="Number of packets to generate")
 cli.add_argument("--log-level", type=str, default="WARN", dest="loglevel",
         help="Logging level")
+cli.add_argument("--random-seed", type=long,
+        dest="randomseed", metavar="SEED", default=None,
+        help="Initialize the random number generator with the given SEED")
 cli.add_argument("pcapfile", help="Path to output pcap file")
 cli.add_argument("specfile", help="Path to input packet specification",
         type=argparse.FileType("rb"))
@@ -311,6 +314,8 @@ if __name__ == "__main__":
                 .format(args.loglevel, u", ".join(LOGLEVELS)))
     logging.basicConfig(level=getattr(logging, args.loglevel.upper()),
             format=u"%(levelname)s: %(message)s")
+
+    random.seed(args.randomseed)
 
     main_spec_file_path = args.specfile.name
     logging.info(u"Spec: \"%s\" (toplevel)", main_spec_file_path)

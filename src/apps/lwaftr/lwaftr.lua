@@ -12,10 +12,12 @@ local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 local packet = require("core.packet")
+local lib = require("core.lib")
 local bit = require("bit")
 local ffi = require("ffi")
 
 local band, bnot, rshift = bit.band, bit.bnot, bit.rshift
+local bitfield = lib.bitfield
 local C = ffi.C
 
 local debug = false
@@ -74,26 +76,6 @@ local function get_ihl_from_offset(pkt, offset)
    local ver_and_ihl = pkt.data[offset]
    return bit.band(ver_and_ihl, 0xf) * 4
 end
-
--- Return a packet without ethernet or IPv6 headers.
-local function decapsulate(dgram, length)
-   -- FIXME: don't hardcode the values like this
-   local length = length or constants.ethernet_header_size + constants.ipv6_fixed_header_size
-   dgram:pop_raw(length)
-end
-
-local function add_ipv6_header(dgram, ipv6_params)
-   local ipv6_hdr = ipv6:new(ipv6_params)
-   dgram:push(ipv6_hdr)
-   ipv6_hdr:free()
-end
-
-local function add_ethernet_header(dgram, eth_params)
-   local eth_hdr = ethernet:new(eth_params)
-   dgram:push(eth_hdr)
-   eth_hdr:free()
-end
-
 
 local function get_lwAFTR_ipv6(lwstate, binding_entry)
    local lwaftr_ipv6 = binding_entry[5]
@@ -198,24 +180,30 @@ local function ipv6_encapsulate(lwstate, pkt, next_hdr_type, ipv6_src, ipv6_dst,
    -- TODO: decrement the IPv4 ttl as this is part of forwarding
    -- TODO: do not encapsulate if ttl was already 0; send icmp
    if debug then print("ipv6", ipv6_src, ipv6_dst) end
-   local dgram = lwstate.dgram:reuse(pkt, ethernet)
-   decapsulate(dgram, constants.ethernet_header_size)
-   if debug then
-      print("Original packet, minus ethernet:")
-      lwdebug.print_pkt(pkt)
-   end
-   local payload_len = pkt.length
-   local dscp_and_ecn = pkt.data[constants.o_ipv4_dscp_and_ecn]
-   add_ipv6_header(dgram, {next_header = next_hdr_type,
-                           hop_limit = constants.default_ttl,
-                           traffic_class = dscp_and_ecn,
-                           src = ipv6_src,
-                           dst = ipv6_dst})
-   -- The API makes setting the payload length awkward; set it manually
-   ffi.cast("uint16_t*", pkt.data + 4)[0] = C.htons(payload_len)
-   add_ethernet_header(dgram, {src = ether_src,
-                               dst = ether_dst,
-                               type = constants.ethertype_ipv6})
+
+   -- As if it were Ethernet decapsulated.
+   local offset = constants.ethernet_header_size
+   local payload_length = pkt.length - offset
+   local dscp_and_ecn = pkt.data[offset + constants.o_ipv4_dscp_and_ecn]
+   -- Make room at the beginning for IPv6 header.
+   packet.shiftright(pkt, constants.ipv6_fixed_header_size)
+   C.memset(pkt.data, 0, constants.ethernet_header_size + constants.ipv6_fixed_header_size)
+   -- Modify Ethernet header.
+   local eth_hdr = ffi.cast(ethernet._header_ptr_type, pkt.data)
+   eth_hdr.ether_shost = ether_src
+   eth_hdr.ether_dhost = ether_dst
+   eth_hdr.ether_type = C.htons(constants.ethertype_ipv6)
+   -- Modify IPv6 header.
+   local ipv6_hdr = ffi.cast(ipv6._header_ptr_type,
+      pkt.data + constants.ethernet_header_size)
+   bitfield(32, ipv6_hdr, 'v_tc_fl', 0, 4, 6)            -- IPv6 Version
+   bitfield(32, ipv6_hdr, 'v_tc_fl', 4, 8, dscp_and_ecn) -- Traffic class
+   ipv6_hdr.payload_length = C.htons(payload_length)
+   ipv6_hdr.next_header = next_hdr_type
+   ipv6_hdr.hop_limit = constants.default_ttl
+   ipv6_hdr.src_ip = ipv6_src
+   ipv6_hdr.dst_ip = ipv6_dst
+
    if pkt.length <= lwstate.ipv6_mtu then
       if debug then
          print("encapsulated packet:")
@@ -353,7 +341,7 @@ local function encapsulate_ipv4(lwstate, pkt)
                                                 lwstate.aftr_ipv4_ip, lwstate.scratch_ipv4, pkt, icmp_config)
       return ttl0_icmp, empty
    end
- 
+
    local next_hdr = constants.proto_ipv4
    return ipv6_encapsulate(lwstate, pkt, next_hdr, ipv6_src, ipv6_dst,
                            ether_src, ether_dst)
@@ -493,24 +481,28 @@ local function from_b4(lwstate, pkt)
    if in_binding_table(lwstate, ipv6_src_ip, ipv6_dst_ip, ipv4_src_ip, ipv4_src_port) then
       -- Is it worth optimizing this to change src_eth, src_ipv6, ttl, checksum,
       -- rather than decapsulating + re-encapsulating? It would be faster, but more code.
-      local dgram = lwstate.dgram:reuse(pkt)
-      decapsulate(dgram)
+      local offset = constants.ethernet_header_size + constants.ipv6_fixed_header_size
       if debug then
          print("lwstate.hairpinning is", lwstate.hairpinning)
-         print("binding_lookup...", binding_lookup_ipv4_from_pkt(lwstate, pkt, 0))
+         print("binding_lookup...", binding_lookup_ipv4_from_pkt(lwstate, pkt, offset))
       end
-      if lwstate.hairpinning and binding_lookup_ipv4_from_pkt(lwstate, pkt, 0) then
-         -- FIXME: shifting the packet ethernet_header_size right would suffice here
-         -- The ethernet data is thrown away by _encapsulate_ipv4 anyhow.
-         add_ethernet_header(dgram, {src = lwstate.b4_mac,
-                                     dst = lwstate.aftr_mac_b4_side,
-                                     type = constants.ethertype_ipv4})
+      if lwstate.hairpinning and binding_lookup_ipv4_from_pkt(lwstate, pkt, offset) then
+         -- Remove IPv6 header.
+         packet.shiftleft(pkt, constants.ipv6_fixed_header_size)
+         local eth_hdr = ffi.cast(ethernet._header_ptr_type, pkt.data)
+         eth_hdr.ether_shost = lwstate.b4_mac
+         eth_hdr.ether_dhost = lwstate.aftr_mac_b4_side
+         eth_hdr.ether_type = C.htons(constants.ethertype_ipv6)
+
          return encapsulate_ipv4(lwstate, pkt)
       else
-         local dgram = lwstate.dgram:reuse(pkt, ipv4)
-         add_ethernet_header(dgram, {src = lwstate.aftr_mac_inet_side,
-                                     dst = lwstate.inet_mac,
-                                     type = constants.ethertype_ipv4})
+         -- Remove IPv6 header.
+         packet.shiftleft(pkt, constants.ipv6_fixed_header_size)
+         local eth_hdr = ffi.cast(ethernet._header_ptr_type, pkt.data)
+         eth_hdr.ether_shost = lwstate.aftr_mac_inet_side
+         eth_hdr.ether_dhost = lwstate.inet_mac
+         eth_hdr.ether_type = C.htons(constants.ethertype_ipv4)
+
          return pkt, empty
       end
    elseif lwstate.policy_icmpv6_outgoing == lwconf.policies['ALLOW'] then

@@ -1,4 +1,7 @@
-#! /usr/bin/env lua
+#! /usr/bin/env luajit
+
+local ffi = require("ffi")
+ffi.cdef("int isatty(int)")
 
 local function printfln(fmt, ...)
 	print(fmt:format(...))
@@ -31,14 +34,37 @@ end
 local rounds = tonumber(arg[1])
 local command = arg[2]
 
+
+local report_progress
+if ffi.C.isatty(1) ~= 0 then
+	report_progress = function (round, last_value)
+		io.stdout:write(string.format("\rProgress: %d%% (%d/%d)",
+			round / rounds * 100, round, rounds))
+		if last_value ~= nil then
+			io.stdout:write(", last value: " .. tostring(last_value))
+		end
+		io.stdout:flush()
+	end
+else
+	report_progress = function (round, extrainfo)
+		io.stdout:write(".")
+		io.stdout:flush()
+	end
+end
+
+
 local sample_sets = {}
+local last_match = nil
 for i = 1, rounds do
+	report_progress(i, last_match)
+
 	local proc = io.popen(command, "r")
 	local sample_set = 1
 	for line in proc:lines() do
 		-- Rate: N.M MPPS
-		local value, nsubs = string.gsub(line, "^Rate:%s+([%d%.]+)%s+MPPS$", "%1")
+		local value, nsubs = string.gsub(line, "^[Rr]ate[^%d]*([%d%.]+)", "%1")
 		if nsubs > 0 then
+			last_match = line
 			if sample_sets[sample_set] == nil then
 				sample_sets[sample_set] = {}
 			end
@@ -46,7 +72,9 @@ for i = 1, rounds do
 			sample_set = sample_set + 1
 		end
 	end
+	proc:close()
 end
+io.stdout:write("\n")
 
 for setnum, samples in ipairs(sample_sets) do
 	printfln("set %d", setnum)

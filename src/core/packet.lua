@@ -76,9 +76,21 @@ end
 function from_pointer (ptr, len) return append(allocate(), ptr, len) end
 function from_string (d)         return from_pointer(d, #d) end
 
+-- Return metadata table for a given packet
+local packet_metadatas = {}
+function metadata (p)
+	local v = packet_metadatas[p]
+	if v == nil then
+		v = {}
+		packet_metadatas[p] = v
+	end
+	return v
+end
+
 -- Free a packet that is no longer in use.
 local function free_internal (p)
    p.length = 0
+   packet_metadatas[p] = nil
    freelist_add(packets_fl, p)
 end   
 

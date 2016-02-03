@@ -46,6 +46,10 @@ function gen(count, size)
       -- src in rsi
 
       | vzeroall
+      | push r12
+      | push r13
+      | push r14
+      | push r15
 
       local tail_size = size % 32
       local tail_mask
@@ -62,29 +66,33 @@ function gen(count, size)
       while count > 0 do
          local stride = math.min(count, 8)
          local to_copy = size
+         for i = 0, stride-1 do
+            | mov Rq(8+i), [rsi + 8*i]
+         end
          while to_copy >= 32 do
-            -- Irritatingly there appears to be a limitation on ymm(n)
-            -- and Rq(n) for n >= 8!  Get around it by limiting to
-            -- ymm0-ymm7 and using memory for the indexes.
+            local double_copy = to_copy >= 64 and not tail_mask
+            local inc = double_copy and 64 or 32
             for i = 0, stride-1 do
-               | mov rax, [rsi + 8*i]
-               | vmovdqu ymm(i), [rax]
-               | add rax, 32
-               | mov [rsi + 8*i], rax
+               | vmovdqu ymm(i), [Rq(8+i)]
+               | add Rq(8+i), 32
+               if double_copy then
+                  | vmovdqu ymm(8+i), [Rq(8+i)]
+                  | add Rq(8+i), 32
+               end
             end
             for i = 0, stride-1 do
                | vmovdqu [rdi + i*size], ymm(i)
+               if double_copy then
+                  | vmovdqu [rdi + i*size+32], ymm(8+i)
+               end
             end
-            | add rdi, 32
-            to_copy = to_copy - 32
+            | add rdi, inc
+            to_copy = to_copy - inc
          end
 
          if to_copy > 0 then
             for i = 0, stride-1 do
-               | mov rax, [rsi + 8*i]
-               | vpmaskmovd ymm(i), ymm15, [rax]
-               | add rax, to_copy
-               | mov [rsi + 8*i], rax
+               | vpmaskmovd ymm(i), ymm15, [Rq(8+i)]
             end
             for i = 0, stride-1 do
                | vpmaskmovd [rdi + i*size], ymm15, ymm(i)
@@ -101,6 +109,10 @@ function gen(count, size)
          count = count - stride
       end
       | vzeroall
+      | pop r15
+      | pop r14
+      | pop r13
+      | pop r12
       | ret
    end
 

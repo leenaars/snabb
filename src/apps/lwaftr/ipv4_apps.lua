@@ -36,8 +36,6 @@ ICMPEcho = {}
 
 function Reassembler:new(conf)
    local o = setmetatable({}, {__index=Reassembler})
-   o.conf = conf
-
    if conf.vlan_tagging then
       o.l2_size = ethernet_header_size + 4
       o.ethertype_offset = constants.o_ethernet_ethertype + 4
@@ -46,6 +44,12 @@ function Reassembler:new(conf)
       o.ethertype_offset = constants.o_ethernet_ethertype
    end
    o.fragment_cache = {}
+   o.fragment_count = 0
+   o.fragment_key_count = 0
+   o.fragment_cache_max = conf.fragment_cache_max
+   if o.fragment_cache_max < 2 then
+      o.fragment_cache_max = 2
+   end
    return o
 end
 
@@ -58,15 +62,37 @@ end
 
 function Reassembler:cache_fragment(frag)
    local cache = self.fragment_cache
+
+   if self.fragment_count >= self.fragment_cache_max then
+      local n = math.random(self.fragment_key_count)
+      for _, frags in pairs(cache) do
+         n = n - 1
+         if n == 0 then
+            self:clean_fragment_cache(frags)
+            break
+         end
+      end
+   end
+
    local key = self:key_frag(frag)
-   cache[key] = cache[key] or {}
-   table.insert(cache[key], frag)
-   return cache[key]
+   local frags = cache[key]
+   if not frags then
+      -- The first fragment is going to be added.
+      self.fragment_key_count = self.fragment_key_count + 1
+      frags = {}
+      cache[key] = frags
+   end
+   self.fragment_count = self.fragment_count + 1
+
+   table.insert(frags, frag)
+   return frags
 end
 
 function Reassembler:clean_fragment_cache(frags)
    local key = self:key_frag(frags[1])
    self.fragment_cache[key] = nil
+   self.fragment_count = self.fragment_count - #frags
+   self.fragment_key_count = self.fragment_key_count - 1
    for _, p in ipairs(frags) do
       packet.free(p)
    end

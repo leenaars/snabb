@@ -104,17 +104,14 @@ function test_ipv4_assemble()
    print("IPv4 Reassembler ok no cache eviction")
 
    local r = assert(make_reassembler(ipv4_apps))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.10.0.1", "10.10.0.2", 1, 0, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.10.0.1", "10.10.0.2", 1, 16, false, 16))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
 
    assert(link.nreadable(r.output.output) == 1)
@@ -128,23 +125,19 @@ function test_ipv4_evict()
    print("IPv4 Reassembler cache eviction")
 
    local r = assert(make_reassembler(ipv4_apps))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.10.0.1", "10.10.0.2", 1, 0, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.20.0.1", "10.20.0.2", 2, 0, true, 16))
-   assert(r.fragment_key_count == 2)
    assert(r.fragment_count == 2)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.30.0.1", "10.30.0.2", 3, 0, true, 16))
-   assert(r.fragment_key_count == 2)
-   assert(r.fragment_count == 2)
+   assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:finish()
@@ -154,22 +147,18 @@ function test_ipv4_evict_same_flow()
    print("IPv4 Reassembler: same flow packets cache eviction")
 
    local r = assert(make_reassembler(ipv4_apps))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.0.0.1", "10.0.0.2", 1, 0, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.0.0.1", "10.0.0.2", 1, 16, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 2)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.0.0.1", "10.0.0.2", 1, 32, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
@@ -180,27 +169,22 @@ function test_ipv4_evict_then_assemble()
    print("IPv4 Reassembler: same flow packets cache eviction, then reassembly")
 
    local r = assert(make_reassembler(ipv4_apps))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.0.0.1", "10.0.0.2", 1, 0, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.0.0.1", "10.0.0.2", 1, 16, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 2)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.0.0.1", "10.0.0.2", 1, 0, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv4("10.0.0.1", "10.0.0.2", 1, 16, false, 16))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
 
    assert(link.nreadable(r.output.output) == 1)
@@ -214,17 +198,14 @@ function test_ipv6_assemble()
    print("IPv6 Reassembler ok no cache eviction")
 
    local r = assert(make_reassembler(ipv6_apps))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 0, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 16, false, 16))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
 
    assert(link.nreadable(r.output.output) == 1)
@@ -238,23 +219,19 @@ function test_ipv6_evict()
    print("IPv6 Reassembler cache eviction")
 
    local r = assert(make_reassembler(ipv6_apps))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 0, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2002::1", "2002::2", 2, 0, true, 16))
-   assert(r.fragment_key_count == 2)
    assert(r.fragment_count == 2)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2003::1", "2003::2", 3, 0, true, 16))
-   assert(r.fragment_key_count == 2)
-   assert(r.fragment_count == 2)
+   assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:finish()
@@ -264,22 +241,18 @@ function test_ipv6_evict_same_flow()
    print("IPv6 Reassembler: same flow packets cache eviction")
 
    local r = assert(make_reassembler(ipv6_apps))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 0, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 16, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 2)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 32, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
@@ -290,27 +263,22 @@ function test_ipv6_evict_then_assemble()
    print("IPv6 Reassembler: same flow packets cache eviction, then reassembly")
 
    local r = assert(make_reassembler(ipv6_apps))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 0, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 16, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 2)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 0, true, 16))
-   assert(r.fragment_key_count == 1)
    assert(r.fragment_count == 1)
    assert(link.empty(r.output.output))
 
    r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 16, false, 16))
-   assert(r.fragment_key_count == 0)
    assert(r.fragment_count == 0)
 
    assert(link.nreadable(r.output.output) == 1)

@@ -4,6 +4,7 @@ if type((...)) == "string" then module(..., package.seeall) end
 local ipv4_apps = require("apps.lwaftr.ipv4_apps")
 local ipv6_apps = require("apps.lwaftr.ipv6_apps")
 local constants = require("apps.lwaftr.constants")
+local lwutil = require("apps.lwaftr.lwutil")
 
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
@@ -51,6 +52,32 @@ local function make_fragment_ipv4(src, dst, frag_id, frag_offset, more_frags, pa
       ip:flags(0x1)
    end
    ip:checksum()
+   return pkt
+end
+
+local function make_fragment_ipv6(src, dst, frag_id, frag_offset, more_frags, payload_size)
+   assert(frag_offset % 8 == 0)
+   frag_offset = bit.lshift(frag_offset / 8, 3)
+   if more_frags then
+      frag_offset = bit.bor(frag_offset, 0x1)
+   end
+
+   local pkt = make_fragment_base(constants.ethertype_ipv6,
+                                  constants.ipv6_fixed_header_size + constants.ipv6_frag_header_size,
+                                  payload_size)
+   local ip = ipv6:new_from_mem(pkt.data + ethernet:sizeof(), constants.ipv6_fixed_header_size)
+
+   ip:version(6)
+   ip:payload_length(payload_size + constants.ipv6_frag_header_size)
+   ip:next_header(constants.ipv6_frag)
+   ip:hop_limit(15)
+   ip:src(ipv6:pton(src))
+   ip:dst(ipv6:pton(dst))
+
+   pkt.data[ethernet:sizeof() + constants.ipv6_fixed_header_size + 0] = constants.proto_tcp
+   lwutil.wr16(pkt.data + ethernet:sizeof() + constants.ipv6_fixed_header_size + 2, lwutil.htons(frag_offset))
+   lwutil.wr32(pkt.data + ethernet:sizeof() + constants.ipv6_fixed_header_size + 4, lwutil.htonl(frag_id))
+
    return pkt
 end
 
@@ -183,11 +210,126 @@ function test_ipv4_evict_then_assemble()
    r:finish()
 end
 
+function test_ipv6_assemble()
+   print("IPv6 Reassembler ok no cache eviction")
+
+   local r = assert(make_reassembler(ipv6_apps))
+   assert(r.fragment_key_count == 0)
+   assert(r.fragment_count == 0)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 0, true, 16))
+   assert(r.fragment_key_count == 1)
+   assert(r.fragment_count == 1)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 16, false, 16))
+   assert(r.fragment_key_count == 0)
+   assert(r.fragment_count == 0)
+
+   assert(link.nreadable(r.output.output) == 1)
+   local p = assert(r:pull_packet())
+   assert(p.length == ethernet:sizeof() + constants.ipv6_fixed_header_size + 32)
+
+   r:finish()
+end
+
+function test_ipv6_evict()
+   print("IPv6 Reassembler cache eviction")
+
+   local r = assert(make_reassembler(ipv6_apps))
+   assert(r.fragment_key_count == 0)
+   assert(r.fragment_count == 0)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 0, true, 16))
+   assert(r.fragment_key_count == 1)
+   assert(r.fragment_count == 1)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2002::1", "2002::2", 2, 0, true, 16))
+   assert(r.fragment_key_count == 2)
+   assert(r.fragment_count == 2)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2003::1", "2003::2", 3, 0, true, 16))
+   assert(r.fragment_key_count == 2)
+   assert(r.fragment_count == 2)
+   assert(link.empty(r.output.output))
+
+   r:finish()
+end
+
+function test_ipv6_evict_same_flow()
+   print("IPv6 Reassembler: same flow packets cache eviction")
+
+   local r = assert(make_reassembler(ipv6_apps))
+   assert(r.fragment_key_count == 0)
+   assert(r.fragment_count == 0)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 0, true, 16))
+   assert(r.fragment_key_count == 1)
+   assert(r.fragment_count == 1)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 16, true, 16))
+   assert(r.fragment_key_count == 1)
+   assert(r.fragment_count == 2)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 32, true, 16))
+   assert(r.fragment_key_count == 1)
+   assert(r.fragment_count == 1)
+   assert(link.empty(r.output.output))
+
+   r:finish()
+end
+
+function test_ipv6_evict_then_assemble()
+   print("IPv6 Reassembler: same flow packets cache eviction, then reassembly")
+
+   local r = assert(make_reassembler(ipv6_apps))
+   assert(r.fragment_key_count == 0)
+   assert(r.fragment_count == 0)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 0, true, 16))
+   assert(r.fragment_key_count == 1)
+   assert(r.fragment_count == 1)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 16, true, 16))
+   assert(r.fragment_key_count == 1)
+   assert(r.fragment_count == 2)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 0, true, 16))
+   assert(r.fragment_key_count == 1)
+   assert(r.fragment_count == 1)
+   assert(link.empty(r.output.output))
+
+   r:push_packet(make_fragment_ipv6("2001::1", "2001::2", 1, 16, false, 16))
+   assert(r.fragment_key_count == 0)
+   assert(r.fragment_count == 0)
+
+   assert(link.nreadable(r.output.output) == 1)
+   local p = assert(r:pull_packet())
+   assert(p.length == ethernet:sizeof() + constants.ipv6_fixed_header_size + 32)
+
+   r:finish()
+end
+
 function selftest()
    test_ipv4_assemble()
    test_ipv4_evict()
    test_ipv4_evict_same_flow()
    test_ipv4_evict_then_assemble()
+
+   test_ipv6_assemble()
+   test_ipv6_evict()
+   test_ipv6_evict_same_flow()
+   test_ipv6_evict_then_assemble()
 end
 
 -- Run tests when being invoked as a script from the command line.

@@ -25,7 +25,7 @@ local function parse_args(args)
       tap = { app = Tap, tx = "output", rx = "input" };
       raw = { app = RawSocket, tx = "tx", rx = "rx" };
    }
-   local verbosity = 0
+   local verbosity, debug = 0, false
    local bt_file, conf_file, b4_if, b4_if_kind, inet_if, inet_if_kind
    local handlers = {
       v = function ()
@@ -54,25 +54,29 @@ local function parse_args(args)
                "invalid/missing device kind in '%s'", arg)
          inet_if_kind = device_kind_map[inet_if_kind]
       end;
+      D = function ()
+         debug = true
+      end;
       h = function (arg)
          print(require("program.lwaftr.run_nohw.README_inc"))
          main.exit(0)
       end;
    }
-   lib.dogetopt(args, handlers, "b:c:B:I:vh", {
-      help = "h", conf = "c", verbose = "v",
+   lib.dogetopt(args, handlers, "b:c:B:I:vDh", {
+      help = "h", conf = "c", verbose = "v", debug = "D",
       ["b4-if"] = "B", ["inet-if"] = "I",
    })
    check(conf_file, "no configuration specified (--conf/-c)")
    check(b4_if, "no B4-side interface specified (--b4-if/-B)")
    check(inet_if, "no Internet-side interface specified (--inet-if/-I)")
-   return verbosity, bt_file, conf_file, b4_if, b4_if_kind, inet_if, inet_if_kind
+   return verbosity, bt_file, conf_file, b4_if, b4_if_kind, inet_if, inet_if_kind, debug
 end
 
 
 function run(parameters)
-   local verbosity, bt_file, conf_file, b4_if, b4_if_kind, inet_if, inet_if_kind = parse_args(parameters)
+   local verbosity, bt_file, conf_file, b4_if, b4_if_kind, inet_if, inet_if_kind, debug = parse_args(parameters)
    local conf = require("apps.lwaftr.conf").load_lwaftr_config(conf_file)
+   conf.debug = debug
 
    local c = config.new()
    setup.lwaftr_app(c, conf)

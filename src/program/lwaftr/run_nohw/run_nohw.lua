@@ -36,6 +36,11 @@ local function parse_args(args)
          check(file_exists(arg), "no such file '%s'", arg)
          conf_file = arg
       end;
+      b = function (arg)
+         check(arg, "argument to '--bt' not specified")
+         check(file_exists(arg), "no such file '%s'", arg)
+         bt_file = arg
+      end;
       B = function (arg)
          check(arg, "argument to '--b4-if' not specified")
          b4_if_kind, b4_if = arg:match("^([a-z]+):([^%s]+)$")

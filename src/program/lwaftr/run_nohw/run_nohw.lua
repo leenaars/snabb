@@ -68,7 +68,7 @@ local function parse_args(args)
       end;
    }
    lib.dogetopt(args, handlers, "b:c:B:I:vDh", {
-      help = "h", conf = "c", verbose = "v", debug = "D",
+      help = "h", conf = "c", verbose = "v", debug = "D", bt = "b",
       ["b4-if"] = "B", ["inet-if"] = "I",
    })
    check(conf_file, "no configuration specified (--conf/-c)")

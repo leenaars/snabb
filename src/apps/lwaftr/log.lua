@@ -20,7 +20,42 @@ local string_match = string.match
 local string_gsub = string.gsub
 local string_sub = string.sub
 local os_date = os.date
-local _tostring, _tonumber, _select, _type = tostring, tonumber, select, type
+local table_insert, table_concat = table.insert, table.concat
+local _tostring, _tonumber, _pairs, _type = tostring, tonumber, pairs, type
+
+
+-- TODO: Handle cycles in tables.
+local function do_pprint (value)
+   if _type(value) == "table" then
+      local items = {}
+      for k, v in _pairs(value) do
+         table_insert(items, string_format("%s=%s", k, do_pprint(v)))
+      end
+      return "{ " .. table_concat(items, ", ") .. " }"
+   elseif _type(value) == "string" then
+      return string_format("%q", value)
+   else
+      return _tostring(value)
+   end
+end
+log.format.linepp = do_pprint
+
+
+local function do_pprint_indent (value, indent)
+   if _type(value) == "table" then
+      local items = {}
+      for k, v in _pairs(value) do
+         table_insert(items, string_format("%s = %s", k, do_pprint_indent(v, indent .. "  ")))
+      end
+      return "{\n  " .. indent .. table_concat(items, ",\n  " .. indent) .. "\n" .. indent .. "}"
+   elseif _type(value) == "string" then
+      return string_format("%q", value)
+   else
+      return _tostring(value)
+   end
+end
+log.format.pp = function (value) return do_pprint_indent(value, "") end
+
 
 local msgformat = "%s[%-6s%s]%s %s:%d: %s\n"
 local spec_pattern = "^([^%%]*)%%?(.*)$"

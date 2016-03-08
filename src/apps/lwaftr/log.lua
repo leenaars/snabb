@@ -2,6 +2,7 @@ local log = {
    usecolor = true;
    level    = "warn";
    output   = io.stderr;
+   format   = {};
 }
 
 local modes = {
@@ -15,11 +16,57 @@ local modes = {
 
 local debug_getinfo = debug.getinfo
 local string_format = string.format
+local string_match = string.match
+local string_gsub = string.gsub
+local string_sub = string.sub
 local os_date = os.date
-local _type = type
+local _tostring, _tonumber, _select, _type = tostring, tonumber, select, type
 
 local msgformat = "%s[%-6s%s]%s %s:%d: %s\n"
+local spec_pattern = "^([^%%]*)%%?(.*)$"
 local levels = {}
+
+local function interpolate (fmtstring, ...)
+   local current_index = 1
+   local args = { ... }
+
+   return (string_gsub(fmtstring, "%$%{(.-)}", function (spec)
+      local element, conversion = string_match(spec, spec_pattern)
+
+      local value
+      if #element == 0 then
+         -- Pick from current_index without increment
+         value = args[current_index]
+      elseif element == "." then
+         -- Current index with increment
+         value = args[current_index]
+         current_index = current_index + 1
+      else
+         local index = _tonumber(element)
+         if index then
+            -- Numeric index
+            value = args[index]
+         else
+            -- Named index
+            local table = args[current_index]
+            if string_sub(element, 1, 1) == "." then
+               value = table[string_sub(element, 2)]
+               current_index = current_index + 1
+            else
+               value = table[element]
+            end
+         end
+      end
+
+      if #conversion == 0 then
+         return _tostring(value)
+      elseif log.format[conversion] then
+         return log.format[conversion](value)
+      else
+         return string_format("%" .. conversion, value)
+      end
+   end))
+end
 
 for i, v in ipairs(modes) do
    levels[v.name] = i
@@ -33,9 +80,9 @@ for i, v in ipairs(modes) do
       local message
       if _type(arg1) == "function" then
          -- Arguments are retrieved by invoking the function
-         message = string_format(fmtstring, arg1())
+         message = interpolate(fmtstring, arg1())
       else
-         message = string_format(fmtstring, arg1, ...)
+         message = interpolate(fmtstring, arg1, ...)
       end
 
       local dinfo = debug_getinfo(2, "Sl")
@@ -52,4 +99,6 @@ for i, v in ipairs(modes) do
    end
 end
 
+
+log.interpolate = interpolate
 return log
